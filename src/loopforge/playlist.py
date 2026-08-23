@@ -1,9 +1,11 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import unicodedata
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass, replace
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 from fractions import Fraction
+from itertools import islice
 from pathlib import Path
 from uuid import uuid4
 
@@ -84,6 +86,34 @@ class RenderSegment:
 
 
 @dataclass(frozen=True, slots=True)
+class PlaylistTimelineEntry:
+    track_id: str
+    title: str
+    path: Path
+    stream_index: int
+    output_start: Fraction
+    source_start: Fraction
+    duration: Fraction
+    clipped: bool
+
+    def __post_init__(self) -> None:
+        if not self.track_id or self.stream_index < 0:
+            raise ValueError("Invalid timeline source")
+        if self.output_start < 0 or self.source_start < 0 or self.duration <= 0:
+            raise ValueError("Invalid timeline entry timing")
+
+    @property
+    def output_end(self) -> Fraction:
+        return self.output_start + self.duration
+
+
+@dataclass(frozen=True, slots=True)
+class TimelinePreview:
+    text: str
+    truncated: bool
+
+
+@dataclass(frozen=True, slots=True)
 class AudioRenderPlan:
     playlist: Playlist
     full_repetitions: int
@@ -116,6 +146,108 @@ class AudioRenderPlan:
     @property
     def empty(self) -> bool:
         return False
+
+    @property
+    def timeline_entry_count(self) -> int:
+        return self.full_repetitions * len(self.playlist.tracks) + len(self.tail)
+
+    def iter_timeline(self) -> Iterator[PlaylistTimelineEntry]:
+        total = PlaylistEngine.total_duration(self.playlist)
+        for repetition in range(self.full_repetitions):
+            output_start = repetition * total
+            for track in self.playlist.tracks:
+                yield PlaylistTimelineEntry(
+                    track.id,
+                    track.title,
+                    track.path,
+                    track.stream_index,
+                    output_start,
+                    Fraction(),
+                    track.duration,
+                    False,
+                )
+                output_start += track.duration
+        titles = {track.id: track.title for track in self.playlist.tracks}
+        for segment in self.tail:
+            yield PlaylistTimelineEntry(
+                segment.track_id,
+                titles[segment.track_id],
+                segment.path,
+                segment.stream_index,
+                segment.output_start,
+                segment.source_start,
+                segment.duration,
+                segment.clipped,
+            )
+
+
+def format_chapter_timestamp(value: Fraction) -> str:
+    if value < 0:
+        raise ValueError("Chapter timestamp cannot be negative")
+    seconds = value.numerator // value.denominator
+    hours, remainder = divmod(seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    if hours:
+        return f"{hours:02}:{minutes:02}:{seconds:02}"
+    return f"{minutes:02}:{seconds:02}"
+
+
+def sanitize_chapter_title(title: str) -> str:
+    cleaned = "".join(
+        " " if unicodedata.category(character) == "Cc" else character for character in title
+    )
+    return " ".join(cleaned.split())
+
+
+def _fallback_chapter_title(path: Path) -> str:
+    return sanitize_chapter_title(path.stem) or "Untitled"
+
+
+def format_youtube_chapters(
+    entries: Iterable[PlaylistTimelineEntry], limit: int | None = None
+) -> str:
+    if limit is not None and limit < 0:
+        raise ValueError("Limit cannot be negative")
+    source = entries if limit is None else islice(entries, limit)
+    return "\n".join(
+        f"{format_chapter_timestamp(entry.output_start)} "
+        f"{sanitize_chapter_title(entry.title) or _fallback_chapter_title(entry.path)}"
+        for entry in source
+    )
+
+
+def preview_youtube_chapters(
+    entries: Iterable[PlaylistTimelineEntry], limit: int
+) -> TimelinePreview:
+    if limit < 0:
+        raise ValueError("Limit cannot be negative")
+    items = list(islice(entries, limit + 1))
+    return TimelinePreview(format_youtube_chapters(items[:limit]), len(items) > limit)
+
+
+def parse_target_duration(text: str) -> Fraction:
+    parts = text.strip().split(":")
+    if not 1 <= len(parts) <= 3 or any(not part for part in parts):
+        raise ValueError("Use seconds, MM:SS, or HH:MM:SS")
+    try:
+        values = [Decimal(part) for part in parts]
+    except InvalidOperation as error:
+        raise ValueError("Use seconds, MM:SS, or HH:MM:SS") from error
+    if any(not value.is_finite() or value < 0 for value in values):
+        raise ValueError("Duration must be positive")
+    if len(values) > 1 and any(value != value.to_integral() for value in values[:-1]):
+        raise ValueError("Only seconds may be fractional")
+    if len(values) > 1 and values[-1] >= 60:
+        raise ValueError("Seconds must be below 60")
+    if len(values) == 3 and values[1] >= 60:
+        raise ValueError("Minutes must be below 60")
+    seconds = sum(
+        (Fraction(value) * (60**index) for index, value in enumerate(reversed(values))),
+        Fraction(),
+    )
+    if seconds <= 0:
+        raise ValueError("Duration must be positive")
+    return seconds
 
 
 class PlaylistEngine:

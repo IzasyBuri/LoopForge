@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from itertools import islice
 from pathlib import Path
 from typing import cast
 
@@ -7,11 +8,14 @@ from PySide6.QtCore import Qt, QUrl, Slot
 from PySide6.QtGui import QDragEnterEvent, QDropEvent, QPixmap
 from PySide6.QtMultimedia import QAudioOutput, QMediaPlayer
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QListWidget,
+    QPlainTextEdit,
     QPushButton,
     QSlider,
     QVBoxLayout,
@@ -19,7 +23,17 @@ from PySide6.QtWidgets import (
 )
 
 from .models import MediaInfo
-from .playlist import Playlist, PlaylistEngine, Track, TrackError, track_from_media
+from .playlist import (
+    Playlist,
+    PlaylistEngine,
+    Track,
+    TrackError,
+    format_chapter_timestamp,
+    format_youtube_chapters,
+    parse_target_duration,
+    preview_youtube_chapters,
+    track_from_media,
+)
 from .playlist_import import SUPPORTED_PLAYLIST_SUFFIXES, import_playlist
 from .probe_tasks import ProbeController, extract_local_files
 from .waveform import WaveformController, WaveformRequest
@@ -93,6 +107,24 @@ class PlaylistPage(QWidget):
         self.error_label.setWordWrap(True)
         layout.addWidget(self.total_label)
         layout.addWidget(self.error_label)
+        target = QHBoxLayout()
+        target.addWidget(QLabel("Target duration"))
+        self.target_duration = QLineEdit()
+        self.target_duration.setPlaceholderText("HH:MM:SS, MM:SS, or seconds")
+        self.target_duration.textChanged.connect(self.refresh_timeline)
+        target.addWidget(self.target_duration, 1)
+        self.copy_timestamps_button = QPushButton("Copy YouTube Timestamps")
+        self.copy_timestamps_button.setAccessibleName("Copy YouTube timestamps")
+        self.copy_timestamps_button.clicked.connect(self.copy_timestamps)
+        target.addWidget(self.copy_timestamps_button)
+        layout.addLayout(target)
+        self.timeline_preview = QPlainTextEdit()
+        self.timeline_preview.setReadOnly(True)
+        self.timeline_preview.setAccessibleName("Timestamp preview")
+        layout.addWidget(self.timeline_preview)
+        self.timeline_status = QLabel("")
+        self.timeline_status.setWordWrap(True)
+        layout.addWidget(self.timeline_status)
         playback = QHBoxLayout()
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.toggle_play)
@@ -108,6 +140,52 @@ class PlaylistPage(QWidget):
         volume.valueChanged.connect(lambda value: self.audio_output.setVolume(value / 100))
         playback.addWidget(volume)
         layout.addLayout(playback)
+        self.refresh_timeline()
+
+    @Slot()
+    def refresh_timeline(self) -> None:
+        self.timeline_preview.clear()
+        self.copy_timestamps_button.setEnabled(False)
+        if not self.playlist.tracks:
+            self.timeline_status.setText("Add tracks to build timestamps")
+            return
+        try:
+            target = parse_target_duration(self.target_duration.text())
+            plan = self.engine.render_target(self.playlist, target)
+        except (ValueError, TrackError) as error:
+            self.timeline_status.setText(str(error))
+            return
+        preview = preview_youtube_chapters(plan.iter_timeline(), 200)
+        self.timeline_preview.setPlainText(preview.text)
+        starts = [
+            format_chapter_timestamp(entry.output_start)
+            for entry in islice(plan.iter_timeline(), 200)
+        ]
+        warnings: list[str] = []
+        if preview.truncated:
+            warnings.append(f"Preview limited to 200 of {plan.timeline_entry_count} lines")
+        if len(starts) != len(set(starts)):
+            warnings.append("Warning: duplicate formatted timestamp starts")
+        if plan.timeline_entry_count > 10000:
+            count = plan.timeline_entry_count
+            warnings.append(f"Cannot copy {count} lines; reduce target to 10000 lines or fewer")
+        self.timeline_status.setText("; ".join(warnings))
+        self.copy_timestamps_button.setEnabled(plan.timeline_entry_count <= 10000)
+
+    @Slot()
+    def copy_timestamps(self) -> None:
+        try:
+            target = parse_target_duration(self.target_duration.text())
+            plan = self.engine.render_target(self.playlist, target)
+        except (ValueError, TrackError) as error:
+            self.timeline_status.setText(str(error))
+            return
+        if plan.timeline_entry_count > 10000:
+            self.timeline_status.setText(
+                f"Cannot copy {plan.timeline_entry_count} lines; reduce target below 10000 lines"
+            )
+            return
+        QApplication.clipboard().setText(format_youtube_chapters(plan.iter_timeline()))
 
     @Slot()
     def browse(self) -> None:
@@ -178,6 +256,7 @@ class PlaylistPage(QWidget):
         self.list.addItems(pending)
         total = int(self.engine.total_duration(self.playlist) * 1000)
         self.total_label.setText(f"Total: {format_duration(total)}")
+        self.refresh_timeline()
 
     def _selected(self) -> Track | None:
         row = self.list.currentRow()
