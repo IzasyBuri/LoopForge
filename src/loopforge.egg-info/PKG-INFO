@@ -1,0 +1,25 @@
+Metadata-Version: 2.4
+Name: loopforge
+Version: 0.1.0
+Summary: Desktop media loop workspace
+Requires-Python: >=3.11
+Description-Content-Type: text/markdown
+Requires-Dist: PySide6<7,>=6.7
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Requires-Dist: ruff>=0.6; extra == "dev"
+Requires-Dist: mypy>=1.11; extra == "dev"
+
+# LoopForge
+
+Phase 0 desktop application foundation.
+
+```powershell
+py -3.11 -m venv .venv
+.venv\Scripts\Activate.ps1
+python -m pip install -e ".[dev]"
+python -m loopforge
+pytest
+ruff check .
+mypy
+```

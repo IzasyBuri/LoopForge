@@ -1,0 +1,12 @@
+QWidget {
+    background: #181a1f;
+    color: #e6e6e6;
+}
+QMainWindow, QMenuBar, QStatusBar {
+    background: #202329;
+}
+QToolTip {
+    background: #2b2f36;
+    color: #ffffff;
+    border: 1px solid #454b55;
+}
