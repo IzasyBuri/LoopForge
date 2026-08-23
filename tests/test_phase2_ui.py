@@ -114,7 +114,10 @@ def test_missing_tools_keeps_ingest_usable_and_marks_card_error(tmp_path: Path) 
     assert window._cards[0].state_label.text().startswith("Error")
     assert "ffmpeg and ffprobe" in window._cards[0].detail_label.text()
     nav = window.findChild(QListWidget)
-    assert nav is not None and [nav.item(index).text() for index in range(nav.count())] == ["Media"]
+    assert nav is not None and [nav.item(index).text() for index in range(nav.count())] == [
+        "Media",
+        "Playlist",
+    ]
     window.close()
 
 

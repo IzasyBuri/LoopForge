@@ -93,6 +93,12 @@ class ProbeController(QObject):
         self._active.remove(request_id)
         self.failed.emit(request_id, message)
 
+    def cancel(self, request_id: str) -> bool:
+        if request_id not in self._active:
+            return False
+        self._active.remove(request_id)
+        return True
+
     def close(self) -> None:
         self._closed = True
         self._active.clear()

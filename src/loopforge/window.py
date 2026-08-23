@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSplitter,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -23,7 +24,9 @@ from PySide6.QtWidgets import (
 from .lifecycle import Runtime
 from .metadata import APP_NAME, VERSION
 from .models import MediaInfo
+from .playlist_widget import PlaylistPage
 from .probe_tasks import ProbeController, extract_local_files
+from .waveform import WaveformController, WaveformService
 
 
 def _value(value: object | None, suffix: str = "") -> str:
@@ -135,6 +138,13 @@ class MainWindow(QMainWindow):
         self.controller = (
             ProbeController(runtime.media_probe, self) if runtime.media_probe else None
         )
+        self.waveform_controller = (
+            WaveformController(
+                WaveformService(runtime.ffmpeg, runtime.cache_dir / "waveforms"), self
+            )
+            if runtime.ffmpeg and runtime.cache_dir
+            else None
+        )
         self._requests: dict[str, MediaCard] = {}
         self._cards: list[MediaCard] = []
         self.setWindowTitle(f"{APP_NAME} {VERSION}")
@@ -158,11 +168,11 @@ class MainWindow(QMainWindow):
         brand = QLabel(APP_NAME)
         brand.setObjectName("brand")
         side.addWidget(brand)
-        nav = QListWidget()
-        nav.setAccessibleName("Workspace navigation")
-        nav.addItem("Media")
-        nav.setCurrentRow(0)
-        side.addWidget(nav)
+        self.nav = QListWidget()
+        self.nav.setAccessibleName("Workspace navigation")
+        self.nav.addItems(["Media", "Playlist"])
+        self.nav.setCurrentRow(0)
+        side.addWidget(self.nav)
         side.addStretch()
         self.tool_status = QLabel("Media tools ready")
         self.tool_status.setObjectName("muted")
@@ -211,7 +221,12 @@ class MainWindow(QMainWindow):
         splitter.addWidget(media_pane)
         splitter.addWidget(preview)
         splitter.setSizes([400, 600])
-        outer.addWidget(splitter, 1)
+        self.pages = QStackedWidget()
+        self.pages.addWidget(splitter)
+        self.playlist_page = PlaylistPage(self.controller, self.waveform_controller)
+        self.pages.addWidget(self.playlist_page)
+        self.nav.currentRowChanged.connect(self.pages.setCurrentIndex)
+        outer.addWidget(self.pages, 1)
         self.setCentralWidget(root)
 
     @Slot()
@@ -265,10 +280,14 @@ class MainWindow(QMainWindow):
     def dropEvent(self, event: QDropEvent) -> None:
         paths = extract_local_files(event.mimeData().urls())
         if paths:
-            self.ingest_paths(paths)
+            if self.pages.currentWidget() is self.playlist_page:
+                self.playlist_page.ingest_paths(paths)
+            else:
+                self.ingest_paths(paths)
             event.acceptProposedAction()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        self.playlist_page.close()
         if self.controller:
             self.controller.close()
         super().closeEvent(event)

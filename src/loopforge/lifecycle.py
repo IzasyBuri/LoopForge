@@ -23,6 +23,7 @@ class Runtime:
     ffmpeg: FFmpegService | None = None
     media_probe: MediaProbeService | None = None
     hardware_detector: HardwareDetector | None = None
+    cache_dir: Path | None = None
 
 
 class Lifecycle:
@@ -56,6 +57,7 @@ class Lifecycle:
             ffmpeg,
             MediaProbeService(ffmpeg) if ffmpeg else None,
             HardwareDetector(ffmpeg) if ffmpeg else None,
+            self.data_dir / "cache",
         )
         logger.info("Application started")
         return self.runtime
