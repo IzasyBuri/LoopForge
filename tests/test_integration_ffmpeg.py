@@ -62,6 +62,9 @@ def test_real_probe_media_types_and_special_paths(
     assert len(info.audio_streams) == audio_count
     if info.video_streams:
         assert info.video_streams[0].frame_rate == Fraction(30000, 1001)
+        counted = probe.probe(output, count_frames=True).video_streams[0]
+        assert counted.counted_frame_count is not None
+        assert counted.counted_frame_count > 0
 
 
 def test_real_invalid_media_and_encoder_detection(tmp_path: Path) -> None:

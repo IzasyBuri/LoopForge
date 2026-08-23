@@ -18,6 +18,7 @@ from loopforge.models import ProcessResult
 class FakeFFmpeg:
     def __init__(self, result: ProcessResult | None = None) -> None:
         self.result = result
+        self.args: list[str] = []
 
     def run(
         self,
@@ -29,6 +30,7 @@ class FakeFFmpeg:
     ) -> ProcessResult:
         assert probe and timeout == 30 and check
         assert args[-1]
+        self.args = args
         if self.result is None:
             raise FFmpegError("failed", ProcessResult(tuple(args), 1, "", "invalid media"))
         return self.result
@@ -62,6 +64,31 @@ def test_probe_parses_stream_types_and_exact_values(tmp_path: Path) -> None:
     assert info.video_streams[0].frame_rate == Fraction(30000, 1001)
     assert info.audio_streams[0].sample_rate == 48000
     assert info.size == 123
+
+
+def test_count_frames_argument_and_nb_read_frames(tmp_path: Path) -> None:
+    media = tmp_path / "counted.mkv"
+    media.touch()
+    payload = '{"streams":[{"index":0,"codec_type":"video","nb_read_frames":"17"}]}'
+    fake = FakeFFmpeg(ProcessResult(("ffprobe",), 0, payload, ""))
+    info = MediaProbeService(fake).probe(media, count_frames=True)  # type: ignore[arg-type]
+    assert fake.args == [
+        "-v",
+        "error",
+        "-count_frames",
+        "-show_format",
+        "-show_streams",
+        "-of",
+        "json",
+        str(media.resolve()),
+    ]
+    assert info.video_streams[0].counted_frame_count == 17
+
+    fake.result = ProcessResult(
+        ("ffprobe",), 0, '{"streams":[{"index":0,"codec_type":"video","nb_read_frames":"N/A"}]}', ""
+    )
+    service = MediaProbeService(fake)  # type: ignore[arg-type]
+    assert service.probe(media, count_frames=True).video_streams[0].counted_frame_count is None
 
 
 def test_probe_rejects_nonexistent_and_directory(tmp_path: Path) -> None:

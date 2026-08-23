@@ -32,6 +32,15 @@ class VideoStreamInfo:
     start_time: Decimal | None = None
     frame_count: int | None = None
     bitrate: int | None = None
+    counted_frame_count: int | None = None
+
+    @property
+    def best_frame_count(self) -> int | None:
+        if self.counted_frame_count is not None and self.counted_frame_count > 0:
+            return self.counted_frame_count
+        if self.frame_count is not None and self.frame_count > 0:
+            return self.frame_count
+        return None
 
     @property
     def authoritative_duration(self) -> Decimal | None:

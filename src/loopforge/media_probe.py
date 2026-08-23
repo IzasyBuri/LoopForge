@@ -58,7 +58,9 @@ class MediaProbeService:
     def __init__(self, ffmpeg: FFmpegService) -> None:
         self.ffmpeg = ffmpeg
 
-    def probe(self, path: Path | str, timeout: float | None = 30) -> MediaInfo:
+    def probe(
+        self, path: Path | str, timeout: float | None = 30, *, count_frames: bool = False
+    ) -> MediaInfo:
         media_path = Path(path).expanduser()
         if not media_path.exists():
             raise MediaPathError(f"Media path does not exist: {media_path}")
@@ -67,8 +69,12 @@ class MediaProbeService:
         resolved = media_path.resolve()
         logger.info("Probing media %s", resolved)
         try:
+            args = ["-v", "error"]
+            if count_frames:
+                args.append("-count_frames")
+            args.extend(["-show_format", "-show_streams", "-of", "json", str(resolved)])
             result = self.ffmpeg.run(
-                ["-v", "error", "-show_format", "-show_streams", "-of", "json", str(resolved)],
+                args,
                 probe=True,
                 timeout=timeout,
             )
@@ -126,6 +132,7 @@ class MediaProbeService:
                         start_time=parse_decimal(raw.get("start_time")),
                         frame_count=parse_int(raw.get("nb_frames")),
                         bitrate=parse_int(raw.get("bit_rate")),
+                        counted_frame_count=parse_int(raw.get("nb_read_frames")),
                     )
                 )
             elif raw.get("codec_type") == "audio":
