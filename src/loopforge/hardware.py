@@ -3,13 +3,37 @@ from __future__ import annotations
 import logging
 import re
 import threading
+from typing import Literal
 
 from .ffmpeg_service import FFmpegError, FFmpegService
-from .models import CodecFamily, EncoderBackend, EncoderCapability, HardwareCapabilities
+from .models import (
+    AudioEncoderCapability,
+    CodecFamily,
+    EncoderBackend,
+    EncoderCapability,
+    HardwareCapabilities,
+)
 
 logger = logging.getLogger(__name__)
 
 _ENCODER_LINE = re.compile(r"^\s*(\S{6})\s+(\S+)\s*(.*)$")
+_VIDEO_ENCODERS: dict[str, tuple[CodecFamily, EncoderBackend]] = {
+    "libx264": ("h264", "cpu"),
+    "libx265": ("hevc", "cpu"),
+    "libsvtav1": ("av1", "cpu"),
+    "libaom-av1": ("av1", "cpu"),
+    "librav1e": ("av1", "cpu"),
+    "h264_nvenc": ("h264", "nvenc"),
+    "h264_qsv": ("h264", "qsv"),
+    "h264_amf": ("h264", "amf"),
+    "hevc_nvenc": ("hevc", "nvenc"),
+    "hevc_qsv": ("hevc", "qsv"),
+    "hevc_amf": ("hevc", "amf"),
+    "av1_nvenc": ("av1", "nvenc"),
+    "av1_qsv": ("av1", "qsv"),
+    "av1_amf": ("av1", "amf"),
+}
+_AUDIO_ENCODERS: dict[str, Literal["aac", "opus"]] = {"aac": "aac", "libopus": "opus"}
 
 
 class HardwareDetectionError(RuntimeError):
@@ -18,31 +42,24 @@ class HardwareDetectionError(RuntimeError):
 
 def parse_video_encoders(output: str) -> HardwareCapabilities:
     encoders: list[EncoderCapability] = []
+    audio_encoders: list[AudioEncoderCapability] = []
+    seen: set[str] = set()
     for line in output.splitlines():
         match = _ENCODER_LINE.match(line)
-        if not match or match.group(1)[0] != "V":
+        if not match:
             continue
         name = match.group(2).lower()
-        codec: CodecFamily
-        if "264" in name or name.startswith("h264"):
-            codec = "h264"
-        elif "265" in name or "hevc" in name:
-            codec = "hevc"
-        elif "av1" in name:
-            codec = "av1"
-        else:
+        if name in seen:
             continue
-        backend: EncoderBackend
-        if "nvenc" in name:
-            backend = "nvenc"
-        elif "qsv" in name:
-            backend = "qsv"
-        elif "amf" in name:
-            backend = "amf"
-        else:
-            backend = "cpu"
-        encoders.append(EncoderCapability(name, codec, backend, match.group(3).strip()))
-    return HardwareCapabilities(tuple(encoders))
+        description = match.group(3).strip()
+        if match.group(1)[0] == "V" and name in _VIDEO_ENCODERS:
+            codec, backend = _VIDEO_ENCODERS[name]
+            encoders.append(EncoderCapability(name, codec, backend, description))
+            seen.add(name)
+        elif match.group(1)[0] == "A" and name in _AUDIO_ENCODERS:
+            audio_encoders.append(AudioEncoderCapability(name, _AUDIO_ENCODERS[name], description))
+            seen.add(name)
+    return HardwareCapabilities(tuple(encoders), tuple(audio_encoders))
 
 
 class HardwareDetector:

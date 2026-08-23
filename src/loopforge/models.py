@@ -104,6 +104,13 @@ EncoderBackend = Literal["nvenc", "qsv", "amf", "cpu"]
 
 
 @dataclass(frozen=True, slots=True)
+class AudioEncoderCapability:
+    name: str
+    codec: Literal["aac", "opus"]
+    description: str
+
+
+@dataclass(frozen=True, slots=True)
 class EncoderCapability:
     name: str
     codec: CodecFamily
@@ -118,6 +125,7 @@ class EncoderCapability:
 @dataclass(frozen=True, slots=True)
 class HardwareCapabilities:
     encoders: tuple[EncoderCapability, ...]
+    audio_encoders: tuple[AudioEncoderCapability, ...] = ()
 
     @property
     def available_encoders(self) -> tuple[EncoderCapability, ...]:
@@ -146,3 +154,9 @@ class HardwareCapabilities:
 
     def supports(self, codec: CodecFamily, backend: EncoderBackend | None = None) -> bool:
         return bool(self.encoders_for(codec, backend))
+
+    def has_encoder(self, name: str) -> bool:
+        return any(item.name == name for item in self.encoders)
+
+    def supports_audio(self, codec: Literal["aac", "opus"]) -> bool:
+        return any(item.codec == codec for item in self.audio_encoders)

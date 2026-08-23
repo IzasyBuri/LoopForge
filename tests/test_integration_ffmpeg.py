@@ -5,10 +5,15 @@ from pathlib import Path
 import pytest
 
 from loopforge.config import Settings
+from loopforge.encoding import EncodingSettings
+from loopforge.encoding_engine import EncodingEngine, EncodingError
 from loopforge.ffmpeg_service import FFmpegService
 from loopforge.hardware import HardwareDetector
 from loopforge.media_probe import MediaProbeError, MediaProbeService
 from loopforge.media_tools import DiscoveryError, discover_media_tools
+from loopforge.models import HardwareCapabilities
+from loopforge.output_validation import OutputValidationService
+from loopforge.timeline import VideoLoopEngine
 
 
 def services() -> tuple[FFmpegService, MediaProbeService]:
@@ -76,3 +81,69 @@ def test_real_invalid_media_and_encoder_detection(tmp_path: Path) -> None:
 
     capabilities = HardwareDetector(ffmpeg).detect()
     assert all(item.codec in {"h264", "hevc", "av1"} for item in capabilities.encoders)
+
+
+def test_real_encoding_engine_loops_partial_tail_and_publishes(tmp_path: Path) -> None:
+    ffmpeg, probe = services()
+    capabilities = HardwareDetector(ffmpeg).detect()
+    if not capabilities.has_encoder("libx264"):
+        pytest.skip("libx264 unavailable")
+    source = tmp_path / "source [ä 中] 3.mkv"
+    ffmpeg.run(
+        (
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=16x16:rate=7",
+            "-frames:v",
+            "3",
+            "-c:v",
+            "libx264",
+            "-pix_fmt",
+            "yuv420p",
+            "-y",
+            str(source),
+        )
+    )
+    counted = probe.probe(source, count_frames=True).primary_video_stream
+    assert counted is not None and counted.counted_frame_count == 3
+    plan = VideoLoopEngine().for_target_duration(
+        fps=Fraction(7),
+        source_duration=Fraction(3, 7),
+        target_duration=Fraction(8, 7),
+        counted_frame_count=counted.counted_frame_count,
+    )
+    output = tmp_path / "output [ä 中] partial.mp4"
+    settings = EncodingSettings("Custom", "h264", "none", "mp4", "cpu", 20, "medium")
+    result = EncodingEngine(ffmpeg, OutputValidationService(probe)).render(
+        source, output, plan, settings, capabilities
+    )
+    validation = OutputValidationService(probe).validate(output, plan)
+    assert result.path == output and output.is_file()
+    assert validation.valid and validation.actual_frame_count == 8
+
+
+def test_real_encoding_failure_preserves_existing_output_and_removes_temp(tmp_path: Path) -> None:
+    ffmpeg, probe = services()
+    source = tmp_path / "invalid source [ä 中].mkv"
+    source.write_bytes(b"not media")
+    output = tmp_path / "existing output [ä 中].mp4"
+    output.write_bytes(b"preserve")
+    plan = VideoLoopEngine().for_repeat_count(
+        fps=Fraction(7), source_duration=Fraction(1, 7), repeat_count=1
+    )
+    settings = EncodingSettings("Custom", "h264", "none", "mp4", "cpu", 20, "medium")
+    capabilities = HardwareCapabilities(
+        tuple(item for item in HardwareDetector(ffmpeg).detect().encoders if item.name == "libx264")
+    )
+    if not capabilities.has_encoder("libx264"):
+        pytest.skip("libx264 unavailable")
+    with pytest.raises(EncodingError):
+        EncodingEngine(ffmpeg, OutputValidationService(probe)).render(
+            source, output, plan, settings, capabilities, overwrite=True
+        )
+    assert output.read_bytes() == b"preserve"
+    assert not (tmp_path / ".existing output [ä 中].loopforge-tmp.mp4").exists()
