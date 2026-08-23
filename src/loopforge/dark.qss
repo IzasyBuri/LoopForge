@@ -1,9 +1,109 @@
 QWidget {
     background: #181a1f;
     color: #e6e6e6;
+    font-size: 14px;
 }
 QMainWindow, QMenuBar, QStatusBar {
     background: #202329;
+}
+QFrame#sidebar {
+    background: #111318;
+    min-width: 175px;
+    max-width: 175px;
+    border-right: 1px solid #343943;
+}
+QLabel#brand {
+    color: #ffffff;
+    font-size: 22px;
+    font-weight: 700;
+    padding: 14px 8px;
+}
+QLabel#heading {
+    color: #ffffff;
+    font-size: 20px;
+    font-weight: 600;
+}
+QLabel#muted {
+    color: #aeb5c0;
+}
+QListWidget {
+    background: transparent;
+    border: 0;
+    outline: 0;
+}
+QListWidget::item {
+    padding: 11px;
+    margin: 2px 0;
+    border-radius: 5px;
+}
+QListWidget::item:selected {
+    background: #315b91;
+    color: #ffffff;
+}
+QFrame#dropTarget {
+    background: #20242b;
+    border: 2px dashed #74839a;
+    border-radius: 8px;
+    min-height: 90px;
+}
+QFrame#dropTarget:focus, QPushButton:focus, QListWidget:focus, QFrame#mediaCard:focus {
+    border: 2px solid #78aef2;
+}
+QPushButton {
+    background: #3169a8;
+    color: #ffffff;
+    border: 1px solid #5590d3;
+    border-radius: 5px;
+    padding: 9px 14px;
+}
+QPushButton:hover {
+    background: #3c79be;
+}
+QScrollArea {
+    border: 0;
+    background: transparent;
+}
+QFrame#mediaCard {
+    background: #242830;
+    border: 1px solid #3c424d;
+    border-radius: 7px;
+    margin: 3px;
+}
+QLabel#cardTitle {
+    color: #ffffff;
+    font-weight: 600;
+}
+QLabel#pendingState {
+    color: #e4c46c;
+}
+QLabel#readyState {
+    color: #75d69a;
+}
+QLabel#errorState {
+    color: #ff8d8d;
+    font-weight: 600;
+}
+QFrame#previewPane {
+    background: #15171c;
+    border-left: 1px solid #343943;
+}
+QLabel#previewPlaceholder {
+    background: #0d0f12;
+    color: #aeb5c0;
+    border: 1px solid #353a44;
+    border-radius: 8px;
+    font-size: 17px;
+}
+QLabel#detailDisplay {
+    background: #20242b;
+    border: 1px solid #353a44;
+    border-radius: 6px;
+    padding: 12px;
+    min-height: 90px;
+}
+QSplitter::handle {
+    background: #343943;
+    width: 2px;
 }
 QToolTip {
     background: #2b2f36;

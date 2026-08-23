@@ -6,7 +6,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ConfigStore, Settings, default_data_dir
+from .ffmpeg_service import FFmpegService
+from .hardware import HardwareDetector
 from .logging_setup import close_logging, configure_logging
+from .media_probe import MediaProbeService
 from .media_tools import DiscoveryError, MediaTools, discover_media_tools
 
 Discoverer = Callable[[Settings, Path | None], MediaTools]
@@ -17,6 +20,9 @@ class Runtime:
     settings: Settings
     logger: logging.Logger
     media_tools: MediaTools | None
+    ffmpeg: FFmpegService | None = None
+    media_probe: MediaProbeService | None = None
+    hardware_detector: HardwareDetector | None = None
 
 
 class Lifecycle:
@@ -42,7 +48,15 @@ class Lifecycle:
         except DiscoveryError as error:
             tools = None
             logger.warning("%s", error)
-        self.runtime = Runtime(settings, logger, tools)
+        ffmpeg = FFmpegService(tools) if tools else None
+        self.runtime = Runtime(
+            settings,
+            logger,
+            tools,
+            ffmpeg,
+            MediaProbeService(ffmpeg) if ffmpeg else None,
+            HardwareDetector(ffmpeg) if ffmpeg else None,
+        )
         logger.info("Application started")
         return self.runtime
 

@@ -21,9 +21,9 @@ def create_application(arguments: list[str]) -> tuple[QApplication, Lifecycle, M
     resources = files("loopforge")
     app.setStyleSheet(resources.joinpath("dark.qss").read_text(encoding="utf-8"))
     lifecycle = Lifecycle(bundled_dir=Path(str(resources.joinpath("bin"))))
-    lifecycle.startup()
+    runtime = lifecycle.startup()
     app.aboutToQuit.connect(lifecycle.shutdown)
-    window = MainWindow()
+    window = MainWindow(runtime)
     return app, lifecycle, window
 
 
