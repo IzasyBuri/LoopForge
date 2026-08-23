@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
             RenderController(
                 RenderWorkflow(runtime.media_probe, runtime.hardware_detector, runtime.renderer),
                 self,
+                runtime.log_dir,
             )
             if runtime.media_probe and runtime.hardware_detector and runtime.renderer
             else None

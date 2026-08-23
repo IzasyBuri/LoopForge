@@ -6,9 +6,10 @@ from pathlib import Path
 
 from .encoding import EncoderSelection, EncodingSettings, select_encoder
 from .ffmpeg_command import FFmpegCommandBuilder
-from .ffmpeg_service import FFmpegError, FFmpegService
+from .ffmpeg_service import FFmpegError, FFmpegService, ProcessCancelledError
 from .models import HardwareCapabilities, ProcessResult
 from .output_validation import OutputValidationError, OutputValidationService
+from .render_context import RenderExecutionContext
 from .timeline import RenderPlan
 
 
@@ -55,6 +56,7 @@ class EncodingEngine:
         overwrite: bool = False,
         timeout: float | None = None,
         prepared_audio: Path | str | None = None,
+        context: RenderExecutionContext | None = None,
     ) -> EncodingResult:
         source_path = Path(source)
         target = Path(output)
@@ -88,6 +90,9 @@ class EncodingEngine:
         attempts: list[EncodingAttempt] = []
         try:
             for encoder in selections:
+                if context:
+                    context.check_cancelled()
+                    context.stage("video")
                 try:
                     result = self.ffmpeg.run(
                         self.builder.build(
@@ -100,7 +105,13 @@ class EncodingEngine:
                             prepared_audio=prepared_audio,
                         ),
                         timeout=timeout,
+                        streaming=context is not None,
+                        on_progress=context.on_progress if context else None,
+                        on_log=context.log if context else None,
+                        on_process=context.process_started if context else None,
                     )
+                except ProcessCancelledError:
+                    raise
                 except FFmpegError as error:
                     attempts.append(EncodingAttempt(encoder, error.result, str(error)))
                     if temporary.exists():

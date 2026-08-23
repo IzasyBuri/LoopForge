@@ -30,6 +30,7 @@ class Runtime:
     output_validator: OutputValidationService | None = None
     encoding_engine: EncodingEngine | None = None
     renderer: VideoMusicRenderer | None = None
+    log_dir: Path | None = None
 
 
 class Lifecycle:
@@ -70,6 +71,7 @@ class Lifecycle:
             validator,
             engine,
             VideoMusicRenderer(ffmpeg, engine) if ffmpeg and engine else None,
+            self.data_dir / "logs" / "renders",
         )
         logger.info("Application started")
         return self.runtime

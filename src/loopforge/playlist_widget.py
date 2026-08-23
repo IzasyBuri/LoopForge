@@ -18,6 +18,8 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSlider,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -36,7 +38,7 @@ from .playlist import (
 )
 from .playlist_import import SUPPORTED_PLAYLIST_SUFFIXES, import_playlist
 from .probe_tasks import ProbeController, extract_local_files
-from .render_tasks import RenderController, UIRenderRequest
+from .render_tasks import RenderController, RenderJobSnapshot, UIRenderRequest
 from .waveform import WaveformController, WaveformRequest
 
 
@@ -80,6 +82,8 @@ class PlaylistPage(QWidget):
         if render_controller:
             render_controller.succeeded.connect(self._render_succeeded)
             render_controller.failed.connect(self._render_failed)
+            if hasattr(render_controller, "jobs_changed"):
+                render_controller.jobs_changed.connect(self._queue_changed)
         self.player.positionChanged.connect(self._position_changed)
         self.player.durationChanged.connect(self._duration_changed)
         self.player.errorOccurred.connect(lambda _error, text: self.error_label.setText(text))
@@ -148,11 +152,38 @@ class PlaylistPage(QWidget):
         self.output_browse_button.setAccessibleName("Browse render output path")
         self.output_browse_button.clicked.connect(self.browse_output)
         render.addWidget(self.output_browse_button)
-        self.render_button = QPushButton("Render")
+        self.render_button = QPushButton("Add to Queue")
         self.render_button.setAccessibleName("Start video render")
         self.render_button.clicked.connect(self.start_render)
         render.addWidget(self.render_button)
         layout.addLayout(render)
+        queue_controls = QHBoxLayout()
+        self.queue_buttons: dict[str, QPushButton] = {}
+        for text, slot in (
+            ("Start Queue", self.start_queue),
+            ("Remove", lambda: self._queue_action("remove")),
+            ("Up", lambda: self._move_queue(-1)),
+            ("Down", lambda: self._move_queue(1)),
+            ("Pause", lambda: self._queue_action("pause")),
+            ("Resume", lambda: self._queue_action("resume")),
+            ("Cancel", lambda: self._queue_action("cancel")),
+            ("Retry", lambda: self._queue_action("retry")),
+            ("Clear Completed", lambda: self._queue_action("clear_completed")),
+        ):
+            button = QPushButton(text)
+            button.clicked.connect(slot)
+            self.queue_buttons[text] = button
+            queue_controls.addWidget(button)
+        layout.addLayout(queue_controls)
+        self.queue = QTreeWidget()
+        self.queue.setAccessibleName("Render queue")
+        self.queue.setHeaderLabels(["Output", "State", "Progress", "Elapsed", "Speed", "ETA"])
+        self.queue.currentItemChanged.connect(self._queue_selection)
+        layout.addWidget(self.queue)
+        self.queue_log = QPlainTextEdit()
+        self.queue_log.setReadOnly(True)
+        self.queue_log.setAccessibleName("Selected render log")
+        layout.addWidget(self.queue_log)
         self.render_status = QLabel("Select a video background and add audio tracks")
         self.render_status.setAccessibleName("Render status")
         self.render_status.setWordWrap(True)
@@ -233,16 +264,91 @@ class PlaylistPage(QWidget):
             parse_target_duration(self.target_duration.text()),
             Path(self.output_path.text()).expanduser(),
         )
+        queued = hasattr(self.render_controller, "jobs_changed")
         self.render_button.setEnabled(False)
         self.render_status.setText(
-            "Rendering… Active render cannot be cancelled; closing hides its result."
+            "Added to queue. Select Start Queue to render."
+            if queued
+            else "Rendering… Active render cannot be cancelled; closing hides its result."
         )
         try:
-            self._render_request = self.render_controller.render(request)
+            self._render_request = (
+                self.render_controller.add(request)
+                if queued
+                else self.render_controller.render(request)
+            )
         except Exception as error:
             self.render_status.setText(str(error))
             self._render_request = None
             self._refresh_render()
+
+    @Slot()
+    def start_queue(self) -> None:
+        if self.render_controller:
+            self.render_controller.start()
+
+    def _selected_job(self) -> str | None:
+        item = self.queue.currentItem()
+        return None if item is None else item.data(0, Qt.ItemDataRole.UserRole)
+
+    def _queue_action(self, action: str) -> None:
+        if not self.render_controller:
+            return
+        if action == "clear_completed":
+            self.render_controller.clear_completed()
+            return
+        job_id = self._selected_job()
+        if job_id:
+            getattr(self.render_controller, action)(job_id)
+
+    def _move_queue(self, offset: int) -> None:
+        if self.render_controller and (job_id := self._selected_job()):
+            self.render_controller.reorder(job_id, self.queue.currentIndex().row() + offset)
+
+    @Slot(object)
+    def _queue_changed(self, snapshots: tuple[RenderJobSnapshot, ...]) -> None:
+        selected = self._selected_job()
+        self.queue.clear()
+        for snapshot in snapshots:
+            progress = snapshot.progress
+            item = QTreeWidgetItem(
+                [
+                    snapshot.config.output.name,
+                    snapshot.state.value,
+                    "" if progress.fraction is None else f"{progress.fraction:.0%}",
+                    f"{progress.elapsed:.1f}s",
+                    "" if progress.speed is None else f"{progress.speed:.2f}x",
+                    "" if progress.eta is None else f"{progress.eta:.1f}s",
+                ]
+            )
+            item.setData(0, Qt.ItemDataRole.UserRole, snapshot.id)
+            self.queue.addTopLevelItem(item)
+            if snapshot.id == selected:
+                self.queue.setCurrentItem(item)
+        self._refresh_queue_controls(snapshots)
+
+    def _refresh_queue_controls(self, snapshots: tuple[RenderJobSnapshot, ...]) -> None:
+        selected = next((item for item in snapshots if item.id == self._selected_job()), None)
+        state = selected.state.value if selected else ""
+        for name in ("Remove", "Up", "Down"):
+            self.queue_buttons[name].setEnabled(state in {"QUEUED", "PAUSED"})
+        self.queue_buttons["Pause"].setEnabled(state in {"PREPARING", "RUNNING"})
+        self.queue_buttons["Resume"].setEnabled(state == "PAUSED")
+        self.queue_buttons["Cancel"].setEnabled(
+            state in {"QUEUED", "PREPARING", "RUNNING", "PAUSED"}
+        )
+        self.queue_buttons["Retry"].setEnabled(state in {"FAILED", "CANCELLED"})
+
+    def _queue_selection(
+        self, item: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None
+    ) -> None:
+        if not self.render_controller or item is None:
+            self.queue_log.clear()
+            return
+        job_id = item.data(0, Qt.ItemDataRole.UserRole)
+        snapshot = next(value for value in self.render_controller.snapshots if value.id == job_id)
+        self.queue_log.setPlainText("\n".join(snapshot.log_tail))
+        self._refresh_queue_controls(self.render_controller.snapshots)
 
     @Slot(str, object)
     def _render_succeeded(self, request_id: str, result: object) -> None:

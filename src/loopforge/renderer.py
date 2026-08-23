@@ -11,6 +11,7 @@ from .encoding_engine import EncodingEngine, EncodingResult
 from .ffmpeg_service import FFmpegService
 from .models import HardwareCapabilities
 from .playlist import AudioRenderPlan
+from .render_context import RenderExecutionContext
 from .timeline import RenderPlan
 
 
@@ -52,7 +53,13 @@ class VideoMusicRenderer:
         self.ffmpeg = ffmpeg
         self.engine = engine
 
-    def render(self, request: RenderRequest, *, timeout: float | None = None) -> EncodingResult:
+    def render(
+        self,
+        request: RenderRequest,
+        *,
+        timeout: float | None = None,
+        context: RenderExecutionContext | None = None,
+    ) -> EncodingResult:
         request.settings.validate_output(request.output.suffix)
         if request.output.exists() and not request.overwrite:
             raise FileExistsError(request.output)
@@ -66,7 +73,11 @@ class VideoMusicRenderer:
             prepared = None
             if request.audio_plan is not None:
                 try:
-                    prepared = self._prepare_audio(request.audio_plan, codec, workspace, timeout)
+                    if context:
+                        context.stage("audio")
+                    prepared = self._prepare_audio(
+                        request.audio_plan, codec, workspace, timeout, context
+                    )
                 except Exception as error:
                     raise RenderStageError("audio", str(error)) from error
             staged = workspace / request.output.name
@@ -80,6 +91,7 @@ class VideoMusicRenderer:
                     overwrite=True,
                     timeout=timeout,
                     prepared_audio=prepared,
+                    context=context,
                 )
             except Exception as error:
                 raise RenderStageError("video", str(error)) from error
@@ -94,6 +106,7 @@ class VideoMusicRenderer:
         codec: str,
         workspace: Path,
         timeout: float | None,
+        context: RenderExecutionContext | None = None,
     ) -> Path:
         normalized: dict[tuple[Path, int, int], Path] = {}
         cycle = workspace / "cycle.s16le"
@@ -104,11 +117,14 @@ class VideoMusicRenderer:
                 raw = normalized.get(key)
                 if raw is None:
                     raw = workspace / f"track-{len(normalized)}.s16le"
-                    self.ffmpeg.run(
+                    self._run(
                         (
                             "-hide_banner",
                             "-loglevel",
                             "error",
+                            "-progress",
+                            "pipe:1",
+                            "-nostats",
                             "-nostdin",
                             "-y",
                             "-i",
@@ -129,6 +145,7 @@ class VideoMusicRenderer:
                             str(raw),
                         ),
                         timeout=timeout,
+                        context=context,
                     )
                     size = raw.stat().st_size
                     expected = samples * 4
@@ -139,6 +156,8 @@ class VideoMusicRenderer:
                     normalized[key] = raw
                 with raw.open("rb") as source:
                     while block := source.read(1024 * 1024):
+                        if context:
+                            context.check_cancelled()
                         destination.write(block)
         if cycle.stat().st_size == 0:
             raise ValueError("Normalized playlist cycle cannot be empty")
@@ -146,7 +165,7 @@ class VideoMusicRenderer:
         output = workspace / f"audio{extension}"
         encoder = "aac" if codec == "aac" else "libopus"
         samples = _sample_count(plan.duration)
-        self.ffmpeg.run(
+        self._run(
             (
                 "-hide_banner",
                 "-loglevel",
@@ -174,8 +193,28 @@ class VideoMusicRenderer:
                 str(output),
             ),
             timeout=timeout,
+            context=context,
         )
         return output
+
+    def _run(
+        self,
+        args: tuple[str, ...],
+        *,
+        timeout: float | None,
+        context: RenderExecutionContext | None,
+    ) -> None:
+        if context is None:
+            self.ffmpeg.run(args, timeout=timeout)
+            return
+        self.ffmpeg.run(
+            args,
+            timeout=timeout,
+            streaming=True,
+            on_progress=context.on_progress,
+            on_log=context.log,
+            on_process=context.process_started,
+        )
 
 
 def _sample_count(value: Fraction) -> int:
