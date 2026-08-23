@@ -6,11 +6,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .config import ConfigStore, Settings, default_data_dir
+from .encoding_engine import EncodingEngine
 from .ffmpeg_service import FFmpegService
 from .hardware import HardwareDetector
 from .logging_setup import close_logging, configure_logging
 from .media_probe import MediaProbeService
 from .media_tools import DiscoveryError, MediaTools, discover_media_tools
+from .output_validation import OutputValidationService
+from .renderer import VideoMusicRenderer
 
 Discoverer = Callable[[Settings, Path | None], MediaTools]
 
@@ -24,6 +27,9 @@ class Runtime:
     media_probe: MediaProbeService | None = None
     hardware_detector: HardwareDetector | None = None
     cache_dir: Path | None = None
+    output_validator: OutputValidationService | None = None
+    encoding_engine: EncodingEngine | None = None
+    renderer: VideoMusicRenderer | None = None
 
 
 class Lifecycle:
@@ -50,14 +56,20 @@ class Lifecycle:
             tools = None
             logger.warning("%s", error)
         ffmpeg = FFmpegService(tools) if tools else None
+        probe = MediaProbeService(ffmpeg) if ffmpeg else None
+        validator = OutputValidationService(probe) if probe else None
+        engine = EncodingEngine(ffmpeg, validator) if ffmpeg and validator else None
         self.runtime = Runtime(
             settings,
             logger,
             tools,
             ffmpeg,
-            MediaProbeService(ffmpeg) if ffmpeg else None,
+            probe,
             HardwareDetector(ffmpeg) if ffmpeg else None,
             self.data_dir / "cache",
+            validator,
+            engine,
+            VideoMusicRenderer(ffmpeg, engine) if ffmpeg and engine else None,
         )
         logger.info("Application started")
         return self.runtime

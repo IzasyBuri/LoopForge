@@ -26,6 +26,7 @@ from .metadata import APP_NAME, VERSION
 from .models import MediaInfo
 from .playlist_widget import PlaylistPage
 from .probe_tasks import ProbeController, extract_local_files
+from .render_tasks import RenderController, RenderWorkflow
 from .waveform import WaveformController, WaveformService
 
 
@@ -145,6 +146,14 @@ class MainWindow(QMainWindow):
             if runtime.ffmpeg and runtime.cache_dir
             else None
         )
+        self.render_controller = (
+            RenderController(
+                RenderWorkflow(runtime.media_probe, runtime.hardware_detector, runtime.renderer),
+                self,
+            )
+            if runtime.media_probe and runtime.hardware_detector and runtime.renderer
+            else None
+        )
         self._requests: dict[str, MediaCard] = {}
         self._cards: list[MediaCard] = []
         self.setWindowTitle(f"{APP_NAME} {VERSION}")
@@ -223,7 +232,9 @@ class MainWindow(QMainWindow):
         splitter.setSizes([400, 600])
         self.pages = QStackedWidget()
         self.pages.addWidget(splitter)
-        self.playlist_page = PlaylistPage(self.controller, self.waveform_controller)
+        self.playlist_page = PlaylistPage(
+            self.controller, self.waveform_controller, self.render_controller
+        )
         self.pages.addWidget(self.playlist_page)
         self.nav.currentRowChanged.connect(self.pages.setCurrentIndex)
         outer.addWidget(self.pages, 1)
@@ -272,6 +283,8 @@ class MainWindow(QMainWindow):
         self.detail_display.setText(
             f"{card.path}\n\n{card.state_label.text()}\n{card.detail_label.text()}"
         )
+        if card.info is not None and card.info.primary_video_stream is not None:
+            self.playlist_page.set_background(card.info)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
         if extract_local_files(event.mimeData().urls()):

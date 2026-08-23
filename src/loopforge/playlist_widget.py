@@ -36,6 +36,7 @@ from .playlist import (
 )
 from .playlist_import import SUPPORTED_PLAYLIST_SUFFIXES, import_playlist
 from .probe_tasks import ProbeController, extract_local_files
+from .render_tasks import RenderController, UIRenderRequest
 from .waveform import WaveformController, WaveformRequest
 
 
@@ -49,10 +50,15 @@ class PlaylistPage(QWidget):
         self,
         controller: ProbeController | None,
         waveform_controller: WaveformController | None = None,
+        render_controller: RenderController | None = None,
     ) -> None:
         super().__init__()
         self.controller = controller
         self.waveform_controller = waveform_controller
+        self.render_controller = render_controller
+        self._render_request: str | None = None
+        self._background: MediaInfo | None = None
+        self._closed = False
         self._waveform_request: str | None = None
         self._waveform_track: str | None = None
         self.setAcceptDrops(True)
@@ -71,6 +77,9 @@ class PlaylistPage(QWidget):
         if waveform_controller:
             waveform_controller.succeeded.connect(self._waveform_succeeded)
             waveform_controller.failed.connect(self._waveform_failed)
+        if render_controller:
+            render_controller.succeeded.connect(self._render_succeeded)
+            render_controller.failed.connect(self._render_failed)
         self.player.positionChanged.connect(self._position_changed)
         self.player.durationChanged.connect(self._duration_changed)
         self.player.errorOccurred.connect(lambda _error, text: self.error_label.setText(text))
@@ -110,6 +119,7 @@ class PlaylistPage(QWidget):
         target = QHBoxLayout()
         target.addWidget(QLabel("Target duration"))
         self.target_duration = QLineEdit()
+        self.target_duration.setAccessibleName("Render target duration")
         self.target_duration.setPlaceholderText("HH:MM:SS, MM:SS, or seconds")
         self.target_duration.textChanged.connect(self.refresh_timeline)
         target.addWidget(self.target_duration, 1)
@@ -125,6 +135,28 @@ class PlaylistPage(QWidget):
         self.timeline_status = QLabel("")
         self.timeline_status.setWordWrap(True)
         layout.addWidget(self.timeline_status)
+        render = QHBoxLayout()
+        self.background_label = QLabel("Background: none selected")
+        self.background_label.setAccessibleName("Render video background")
+        self.background_label.setWordWrap(True)
+        render.addWidget(self.background_label)
+        self.output_path = QLineEdit(str(Path.home() / "loopforge-output.mp4"))
+        self.output_path.setAccessibleName("Render output path")
+        self.output_path.textChanged.connect(self._refresh_render)
+        render.addWidget(self.output_path, 1)
+        self.output_browse_button = QPushButton("Browse Save…")
+        self.output_browse_button.setAccessibleName("Browse render output path")
+        self.output_browse_button.clicked.connect(self.browse_output)
+        render.addWidget(self.output_browse_button)
+        self.render_button = QPushButton("Render")
+        self.render_button.setAccessibleName("Start video render")
+        self.render_button.clicked.connect(self.start_render)
+        render.addWidget(self.render_button)
+        layout.addLayout(render)
+        self.render_status = QLabel("Select a video background and add audio tracks")
+        self.render_status.setAccessibleName("Render status")
+        self.render_status.setWordWrap(True)
+        layout.addWidget(self.render_status)
         playback = QHBoxLayout()
         self.play_button = QPushButton("Play")
         self.play_button.clicked.connect(self.toggle_play)
@@ -142,8 +174,96 @@ class PlaylistPage(QWidget):
         layout.addLayout(playback)
         self.refresh_timeline()
 
+    def set_background(self, info: MediaInfo) -> None:
+        self._background = info if info.primary_video_stream is not None else None
+        self.background_label.setText(
+            f"Background: {info.path.name} · Ready"
+            if self._background
+            else "Background: selected media has no video"
+        )
+        self._refresh_render()
+
+    @Slot()
+    def browse_output(self) -> None:
+        name, _ = QFileDialog.getSaveFileName(
+            self, "Save rendered video", self.output_path.text(), "MP4 video (*.mp4)"
+        )
+        if name:
+            self.output_path.setText(name if name.lower().endswith(".mp4") else f"{name}.mp4")
+
+    def _render_error(self) -> str | None:
+        if self.render_controller is None:
+            return "Rendering unavailable"
+        if self._background is None:
+            return "Select a successfully probed video background"
+        video = self._background.primary_video_stream
+        if video is None or video.frame_rate is None:
+            return "Selected video has no usable frame rate"
+        if not self.playlist.tracks:
+            return "Add at least one audio track"
+        try:
+            parse_target_duration(self.target_duration.text())
+        except ValueError as error:
+            return str(error)
+        output = Path(self.output_path.text()).expanduser()
+        if output.suffix.lower() != ".mp4":
+            return "Output path must end in .mp4"
+        if not output.parent.is_dir():
+            return "Output folder does not exist"
+        return None
+
+    @Slot()
+    def _refresh_render(self) -> None:
+        error = self._render_error()
+        self.render_button.setEnabled(self._render_request is None and error is None)
+        if self._render_request is None and error:
+            self.render_status.setText(error)
+
+    @Slot()
+    def start_render(self) -> None:
+        if self._render_request is not None:
+            return
+        if (error := self._render_error()) is not None:
+            self.render_status.setText(error)
+            return
+        assert self.render_controller is not None and self._background is not None
+        request = UIRenderRequest(
+            self._background.path,
+            self.playlist,
+            parse_target_duration(self.target_duration.text()),
+            Path(self.output_path.text()).expanduser(),
+        )
+        self.render_button.setEnabled(False)
+        self.render_status.setText(
+            "Rendering… Active render cannot be cancelled; closing hides its result."
+        )
+        try:
+            self._render_request = self.render_controller.render(request)
+        except Exception as error:
+            self.render_status.setText(str(error))
+            self._render_request = None
+            self._refresh_render()
+
+    @Slot(str, object)
+    def _render_succeeded(self, request_id: str, result: object) -> None:
+        if self._closed or request_id != self._render_request:
+            return
+        self._render_request = None
+        path = getattr(result, "path", self.output_path.text())
+        self.render_status.setText(f"Rendered: {path}")
+        self._refresh_render()
+
+    @Slot(str, str)
+    def _render_failed(self, request_id: str, message: str) -> None:
+        if self._closed or request_id != self._render_request:
+            return
+        self._render_request = None
+        self.render_status.setText(f"Render failed: {message}")
+        self._refresh_render()
+
     @Slot()
     def refresh_timeline(self) -> None:
+        self._refresh_render()
         self.timeline_preview.clear()
         self.copy_timestamps_button.setEnabled(False)
         if not self.playlist.tracks:
@@ -257,6 +377,7 @@ class PlaylistPage(QWidget):
         total = int(self.engine.total_duration(self.playlist) * 1000)
         self.total_label.setText(f"Total: {format_duration(total)}")
         self.refresh_timeline()
+        self._refresh_render()
 
     def _selected(self) -> Track | None:
         row = self.list.currentRow()
@@ -369,7 +490,10 @@ class PlaylistPage(QWidget):
             event.acceptProposedAction()
 
     def close(self) -> bool:
+        self._closed = True
         self.player.stop()
         if self.waveform_controller:
             self.waveform_controller.close()
+        if self.render_controller:
+            self.render_controller.close()
         return super().close()

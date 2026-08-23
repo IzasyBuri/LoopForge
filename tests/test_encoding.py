@@ -47,8 +47,10 @@ def test_presets_are_typed_frozen_and_complete() -> None:
 
 
 def test_custom_validation_and_container_policy() -> None:
-    with pytest.raises(ValueError, match="audio encoding is not supported"):
+    with pytest.raises(ValueError, match="Opus audio requires MKV"):
         EncodingSettings("Custom", "h264", "opus", "mp4", "cpu", 20, "slow")
+    assert EncodingSettings("Custom", "h264", "opus", "mkv", "cpu", 20, "slow")
+    assert EncodingSettings("Custom", "h264", "aac", "mp4", "cpu", 20, "slow")
     with pytest.raises(ValueError, match="quality"):
         EncodingSettings("Custom", "h264", "none", "mkv", "cpu", 64, "slow")
     with pytest.raises(ValueError, match="extension"):

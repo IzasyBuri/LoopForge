@@ -39,8 +39,8 @@ class EncodingSettings:
     speed: str
 
     def __post_init__(self) -> None:
-        if self.audio_codec != "none":
-            raise ValueError("audio encoding is not supported")
+        if self.container == "mp4" and self.audio_codec == "opus":
+            raise ValueError("Opus audio requires MKV")
         if not 0 <= self.quality <= 63:
             raise ValueError("quality must be between 0 and 63")
         if not self.speed:
@@ -55,10 +55,10 @@ class EncodingSettings:
             raise ValueError(f"output extension must be {self.extension}")
 
 
-ULTRA_FAST = EncodingSettings("Ultra Fast", "h264", "none", "mp4", "auto", 28, "ultrafast")
-FAST = EncodingSettings("Fast", "h264", "none", "mp4", "auto", 24, "fast")
-BALANCED = EncodingSettings("Balanced", "h264", "none", "mp4", "auto", 21, "medium")
-QUALITY = EncodingSettings("Quality", "hevc", "none", "mp4", "auto", 20, "slow")
+ULTRA_FAST = EncodingSettings("Ultra Fast", "h264", "aac", "mp4", "auto", 28, "ultrafast")
+FAST = EncodingSettings("Fast", "h264", "aac", "mp4", "auto", 24, "fast")
+BALANCED = EncodingSettings("Balanced", "h264", "aac", "mp4", "auto", 21, "medium")
+QUALITY = EncodingSettings("Quality", "hevc", "aac", "mp4", "auto", 20, "slow")
 MAXIMUM_QUALITY = EncodingSettings("Maximum Quality", "av1", "none", "mkv", "cpu", 18, "slow")
 CUSTOM = EncodingSettings("Custom", "h264", "none", "mp4", "auto", 21, "medium")
 PRESETS = (ULTRA_FAST, FAST, BALANCED, QUALITY, MAXIMUM_QUALITY, CUSTOM)

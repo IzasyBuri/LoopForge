@@ -19,9 +19,13 @@ class FFmpegCommandBuilder:
         encoder: EncoderSelection,
         *,
         overwrite: bool = False,
+        prepared_audio: Path | str | None = None,
     ) -> tuple[str, ...]:
         settings.validate_output(Path(output).suffix)
         fps = _fraction(plan.fps)
+        audio_input = () if prepared_audio is None else ("-i", str(prepared_audio))
+        audio_output = ("-an",) if prepared_audio is None else ("-map", "1:a:0", "-c:a", "copy")
+        faststart = ("-movflags", "+faststart") if settings.container == "mp4" else ()
         return (
             "-hide_banner",
             "-loglevel",
@@ -32,9 +36,10 @@ class FFmpegCommandBuilder:
             "-1",
             "-i",
             str(source),
+            *audio_input,
             "-map",
             f"0:{plan.stream_index}",
-            "-an",
+            *audio_output,
             "-vf",
             f"trim=start_frame=0:end_frame={plan.frame_count},setpts=N/({fps}*TB)",
             "-frames:v",
@@ -47,6 +52,7 @@ class FFmpegCommandBuilder:
             "-progress",
             "pipe:1",
             "-nostats",
+            *faststart,
             "-f",
             settings.container,
             str(output),

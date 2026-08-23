@@ -54,10 +54,13 @@ class EncodingEngine:
         *,
         overwrite: bool = False,
         timeout: float | None = None,
+        prepared_audio: Path | str | None = None,
     ) -> EncodingResult:
         source_path = Path(source)
         target = Path(output)
         settings.validate_output(target.suffix)
+        if (prepared_audio is None) != (settings.audio_codec == "none"):
+            raise ValueError("audio codec and prepared audio must be provided together")
         if not source_path.is_file():
             raise FileNotFoundError(source_path)
         if not target.parent.is_dir():
@@ -88,7 +91,13 @@ class EncodingEngine:
                 try:
                     result = self.ffmpeg.run(
                         self.builder.build(
-                            source_path, temporary, plan, settings, encoder, overwrite=True
+                            source_path,
+                            temporary,
+                            plan,
+                            settings,
+                            encoder,
+                            overwrite=True,
+                            prepared_audio=prepared_audio,
                         ),
                         timeout=timeout,
                     )
@@ -97,7 +106,12 @@ class EncodingEngine:
                     if temporary.exists():
                         temporary.unlink()
                     continue
-                validation = self.validator.validate(temporary, plan)
+                validation = self.validator.validate(
+                    temporary,
+                    plan,
+                    require_audio=prepared_audio is not None,
+                    audio_codec=settings.audio_codec if prepared_audio is not None else None,
+                )
                 if not validation.valid:
                     raise OutputValidationError("; ".join(validation.errors))
                 attempts.append(EncodingAttempt(encoder, result, ""))
